@@ -15,5 +15,9 @@ rand = "0.3"
 quickcheck = "0.3.1"
 fnv = "1.0"
 
+[features]
+# for testing only, of course
+test_low_transition_point = []
+
 [profile.bench]
 debug = true
