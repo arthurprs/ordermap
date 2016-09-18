@@ -260,17 +260,17 @@ impl<K, V, S> OrderMap<K, V, S>
         let insert_kind;
         debug_assert!(self.len() < self.raw_capacity());
         probe_loop!(probe < self.indices.len(), {
-            if let Some(i) = self.indices[probe].pos() {
+            let pos = &mut self.indices[probe];
+            if let Some(i) = pos.pos() {
                 // if existing element probed less than us, swap
                 let their_dist = probe_distance(self.mask, self.entries[i].hash, probe);
                 if their_dist < dist {
                     // robin hood: steal the spot if it's better for us
                     let index = self.entries.len();
-                    let mut pos = Pos::new(index, hash);
-                    swap(&mut pos, &mut self.indices[probe]);
+                    let old_pos = replace(pos, Pos::new(index, hash));
                     insert_kind = Inserted::RobinHood {
                         probe: probe,
-                        old_pos: pos,
+                        old_pos: old_pos,
                         dist: their_dist,
                     };
                     break;
@@ -280,7 +280,7 @@ impl<K, V, S> OrderMap<K, V, S>
             } else {
                 // empty bucket, insert here
                 let index = self.entries.len();
-                self.indices[probe] = Pos::new(index, hash);
+                *pos = Pos::new(index, hash);
                 insert_kind = Inserted::Done;
                 break;
             }
@@ -292,15 +292,16 @@ impl<K, V, S> OrderMap<K, V, S>
 
     fn insert_phase_2(&mut self, mut probe: usize, mut old_pos: Pos, mut dist: usize) {
         probe_loop!(probe < self.indices.len(), {
-            if let Some(i) = self.indices[probe].pos() {
+            let pos = &mut self.indices[probe];
+            if let Some(i) = pos.pos() {
                 // if existing element probed less than us, swap
                 let their_dist = probe_distance(self.mask, self.entries[i].hash, probe);
                 if their_dist < dist {
-                    swap(&mut old_pos, &mut self.indices[probe]);
+                    swap(&mut old_pos, pos);
                     dist = their_dist;
                 }
             } else {
-                self.indices[probe] = old_pos;
+                *pos = old_pos;
                 break;
             }
             dist += 1;
