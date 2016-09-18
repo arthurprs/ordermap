@@ -64,14 +64,35 @@ impl fmt::Debug for Pos {
     }
 }
 
+
 impl Pos {
     #[inline(always)]
-    fn new(i: usize) -> Self { Pos { index: i as PosType } }
+    fn new(i: usize, h: HashValue) -> Self {
+        if ::std::mem::size_of::<PosType>() == 8 {
+            Pos { index: (i | (h.0 << 40)) as PosType}
+        } else {
+            Pos { index: i as PosType}
+        }
+    }
     #[inline(always)]
-    fn none() -> Self { Pos { index: PosType::max_value() } }
+    fn none() -> Self { Pos { index: PosType::max_value()} }
     #[inline(always)]
     fn pos(&self) -> Option<usize> {
-        if self.index == PosType::max_value() { None } else { Some(self.index as usize) }
+        if self.index == PosType::max_value() { None } else {
+            Some(if ::std::mem::size_of::<PosType>() == 8 {
+                (self.index & !(PosType::max_value() << 40))  as usize
+            } else {
+                self.index as usize
+            })
+        }
+    }
+    #[inline(always)]
+    fn has_similar_hash(&self, h: HashValue) -> bool {
+        if ::std::mem::size_of::<PosType>() == 8 {
+            (self.index >> 40) == ((h.0 << 40) >> 40)
+        } else {
+            true
+        }
     }
 }
 
@@ -245,7 +266,7 @@ impl<K, V, S> OrderMap<K, V, S>
                 if their_dist < dist {
                     // robin hood: steal the spot if it's better for us
                     let index = self.entries.len();
-                    let mut pos = Pos::new(index);
+                    let mut pos = Pos::new(index, hash);
                     swap(&mut pos, &mut self.indices[probe]);
                     insert_kind = Inserted::RobinHood {
                         probe: probe,
@@ -259,7 +280,7 @@ impl<K, V, S> OrderMap<K, V, S>
             } else {
                 // empty bucket, insert here
                 let index = self.entries.len();
-                self.indices[probe] = Pos::new(index);
+                self.indices[probe] = Pos::new(index, hash);
                 insert_kind = Inserted::Done;
                 break;
             }
@@ -336,13 +357,14 @@ impl<K, V, S> OrderMap<K, V, S>
     // read from self.entries at `index`
     fn reinsert_entry_in_order(&mut self, index: usize) {
         // find first empty bucket and insert there
-        let mut probe = desired_pos(self.mask, self.entries[index].hash);
+        let hash = self.entries[index].hash;
+        let mut probe = desired_pos(self.mask, hash);
         probe_loop!(probe < self.indices.len(), {
             if let Some(_) = self.indices[probe].pos() {
                 /* nothing */
             } else {
                 // empty bucket, insert here
-                self.indices[probe] = Pos::new(index);
+                self.indices[probe] = Pos::new(index, hash);
                 return;
             }
         });
@@ -501,12 +523,13 @@ impl<K, V, S> OrderMap<K, V, S> {
         let mut probe = desired_pos(self.mask, hash);
         let mut dist = 0;
         probe_loop!(probe < self.indices.len(), {
-            if let Some(i) = self.indices[probe].pos() {
+            let indices_probe = self.indices[probe];
+            if let Some(i) = indices_probe.pos() {
                 let entry = &self.entries[i];
                 if dist > probe_distance(self.mask, entry.hash, probe) {
                     // give up when probe distance is too long
                     return None;
-                } else if key_eq(entry) {
+                } else if indices_probe.has_similar_hash(hash) && key_eq(entry) {
                     return Some((probe, i));
                 }
             } else {
@@ -534,12 +557,13 @@ impl<K, V, S> OrderMap<K, V, S> {
         if let Some(entry) = self.entries.get(found) {
             // was not last element
             // examine new element in `found` and find it in indices
-            let mut probe = desired_pos(self.mask, entry.hash);
+            let hash = entry.hash;
+            let mut probe = desired_pos(self.mask, hash);
             probe_loop!(probe < self.indices.len(), {
                 if let Some(i) = self.indices[probe].pos() {
                     if i >= self.entries.len() {
                         // found it
-                        self.indices[probe] = Pos::new(found);
+                        self.indices[probe] = Pos::new(found, hash);
                         break;
                     }
                 }
@@ -552,8 +576,9 @@ impl<K, V, S> OrderMap<K, V, S> {
             let mut probe = probe + 1;
             probe_loop!(probe < self.indices.len(), {
                 if let Some(i) = self.indices[probe].pos() {
-                    if probe_distance(self.mask, self.entries[i].hash, probe) > 0 {
-                        self.indices[last_probe] = Pos::new(i);
+                    let hash = self.entries[i].hash;
+                    if probe_distance(self.mask, hash, probe) > 0 {
+                        self.indices[last_probe] = Pos::new(i, hash);
                         self.indices[probe] = Pos::none();
                     } else {
                         break;
